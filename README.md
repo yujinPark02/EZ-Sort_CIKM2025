@@ -281,7 +281,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - **Issues**: [GitHub Issues](https://github.com/your-username/ez-sort/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/your-username/ez-sort/discussions)
-- **Email**: your-email@university.edu
+- **Email**: yujin1019a@hanyang.ac.kr
 
 ## 🌟 Acknowledgments
 
