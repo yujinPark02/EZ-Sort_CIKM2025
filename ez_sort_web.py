@@ -185,69 +185,101 @@ def load_dataset(csv_path: str, image_dir: str, image_col: str, label_col: str) 
         return None
 
 
-def _prompts_face(levels: List[int]) -> Dict[str, List[str]]:
-    """
-    Detailed, adjective-rich prompts for face-age perception.
-    L1..L4; each entry is an explicit textual description with visual cues only.
-    """
+def _prompts_face(levels: list[int]) -> dict[str, list[str]]:
+    """Face-age hierarchical prompts with detailed visual descriptors (Levels 1–4)."""
     P = {}
     if 1 in levels:
-        P["level_1"] = [
-            # Younger vs Older (binary)
-            "a frontal portrait of a younger-looking person with smooth skin, rounder cheeks, larger eyes-to-face ratio, minimal facial hair, and a soft jawline",
-            "a frontal portrait of an older-looking person with coarse skin texture, prominent wrinkles (crow's feet, forehead lines), deeper nasolabial folds, and a defined jawline",
+        P["level1"] = [
+            # 0: Child (0-17)
+            "a photograph of a child or teenager's face with rounded features, smoother skin with no wrinkles, "
+            "larger eyes relative to face, smaller nose and jaw, and no signs of aging like nasolabial folds. "
+            "This face has the soft, unweathered appearance of youth.",
+            # 1: Adult (18+)
+            "a photograph of an adult face with fully defined features, mature facial structure including prominent cheekbones, "
+            "developed jawline, deeper set eyes, potential facial lines, and visible signs of aging like nasolabial folds or crow's feet."
         ]
     if 2 in levels:
-        P["level_2"] = [
-            "an infant or toddler (0–4) with plump cheeks, sparse eyebrows, fine hair, and very smooth skin",
-            "a child (5–12) with soft features, smaller nose bridge, and minimal facial definition",
-            "a teenager (13–19) with emerging jawline, occasional acne, fuller eyebrows, and youthful skin",
-            "a young adult (20–35) with firm skin, clear jawline, limited fine lines, and even skin tone",
-            "a middle-aged adult (36–55) with mild forehead lines, subtle marionette lines, and slight eye bags",
-            "an older adult (56+) with visible wrinkles, age spots, thinner lips, and reduced facial volume",
+        P["level2"] = [
+            # 0_0: Very Young Child (0-8)
+            "a photograph of a very young child (0-8 years) with distinctly childlike features: prominently rounded cheeks, "
+            "disproportionately large forehead, very large eyes relative to face size, tiny nose and undeveloped chin, baby-like facial proportions, "
+            "and the characteristic facial softness of early childhood.",
+            # 0_1: Older Child/Teen (9-17)
+            "a photograph of an older child or teenager (9-17 years) with adolescent features: more defined facial structure starting to emerge, "
+            "less facial roundness than young children, more proportional forehead, developing jaw and cheekbones, possible acne, "
+            "and the transitional features of puberty and adolescence.",
+            # 1_0: Young Adult (18-35)
+            "a photograph of a young adult (18-35 years) with fully developed yet youthful features: defined facial structure, "
+            "clear skin elasticity, sharper jawline, mature proportions, minimal to no wrinkles, "
+            "and the characteristic facial vitality of early adulthood without significant aging signs.",
+            # 1_1: Mature Adult (36+)
+            "a photograph of a mature adult (36+ years) with established aging signs: decreased skin elasticity, visible facial lines especially "
+            "around eyes and mouth, more pronounced nasolabial folds, potential jowls or neck sagging, possibly graying hair, "
+            "and the characteristic facial maturity of middle-age and beyond."
         ]
     if 3 in levels:
-        P["level_3"] = [
-            "an infant (0–1) with very round face, tiny nose, and glossy, poreless skin",
-            "a toddler (2–3) with chubby cheeks, fine baby hairs, and wide eyes",
-            "an early child (4–6) with childlike proportions and smooth, uniform skin tone",
-            "a child (7–9) with subtle facial definition and small, rounded jaw",
-            "a pre-teen (10–12) with transitional features and slightly taller nose bridge",
-            "a teen (13–15) with youthful texture, possible acne, and fuller eyebrows",
-            "a late teen (16–18) with sharper features, faint smile lines, and resilient skin",
-            "a young adult (19–24) with defined jawline, tight skin, and high cheek highlight",
-            "an adult (25–34) with faint dynamic lines and balanced facial volume",
-            "a mid adult (35–44) with fine crow’s feet and subtle forehead lines",
-            "a mature adult (45–54) with visible nasolabial folds and early neck lines",
-            "an older adult (55–64) with reduced skin elasticity and pronounced folds",
-            "a senior adult (65–74) with deeper wrinkles, age spots, and volume loss",
-            "an elderly adult (75+) with pronounced skin laxity and deep-set lines",
+        P["level3"] = [
+            # Infants and Toddlers (0-2)
+            "a photograph of an infant or toddler (0-2 years) with extremely rounded cheeks, disproportionately large head and forehead, tiny features, "
+            "undefined chin, barely visible neck, and the distinctive facial plumpness of babies.",
+            # Young Children (3-8)
+            "a photograph of a young child (3-8 years) with round cheeks but more defined than infants, large eyes relative to face, small nose, "
+            "developing chin structure, primary teeth, and the characteristic innocent expression of early childhood.",
+            # Preteens (9-12)
+            "a photograph of a preteen (9-12 years) with faces beginning to lose childlike roundness, more defined features but still soft, mixed dentition, "
+            "no significant facial hair in boys, pre-pubescent features, and the characteristic appearance of late childhood.",
+            # Teenagers (13-17)
+            "a photograph of a teenager (13-17 years) with emerging adult facial structure, defined jawline starting to appear, possible acne, "
+            "growing nose proportions, emerging facial hair in males, developing secondary sexual characteristics, and the characteristic appearance of adolescence.",
+            # Very Young Adults (18-25)
+            "a photograph of a very young adult (18-25 years) with fully developed yet extremely fresh features, taut skin with high elasticity, "
+            "defined facial structure but with youthful softness, minimal to no facial lines, bright complexion, and the characteristic vigorous appearance of early adulthood.",
+            # Young Adults (26-35)
+            "a photograph of a young adult (26-35 years) with completely mature facial features, defined contours, possible earliest fine lines around eyes when smiling, "
+            "full facial definition, optimal skin elasticity beginning to slightly reduce, and the characteristic appearance of established adulthood.",
+            # Middle-aged Adults (36-50)
+            "a photograph of a middle-aged adult (36-50 years) with visible aging progression, established facial lines especially around eyes and nasolabial area, "
+            "decreasing skin plumpness, possible early sagging, potential graying at temples, and the characteristic appearance of middle age.",
+            # Seniors (51+)
+            "a photograph of a senior adult (51+ years) with pronounced aging features, established wrinkles and facial folds, noticeably decreased skin elasticity, "
+            "visible volume loss in cheeks, more defined nasolabial folds, often gray or white hair, and the characteristic appearance of advanced age."
         ]
     if 4 in levels:
-        P["level_4"] = [
-            # Fine-grained, purely visual: texture, volume, landmarks
-            "a baby (0–6 months) with extremely smooth, translucent skin, almost no facial definition, and sparse hair",
-            "a baby (7–18 months) with soft round cheeks, low brow ridge, and glossy skin sheen",
-            "a toddler (19–36 months) with rounded jaw, short philtrum, and minimal skin texture",
-            "an early child (4–6) with gentle cheek fullness, small nose tip, and bright sclera",
-            "a child (7–9) with mild cheek contour, slightly raised brow ridge, and matte skin",
-            "a pre-teen (10–12) with longer face ratio, clearer jaw outline, and smooth pores",
-            "a teen (13–15) with visible T-zone shine, occasional blemishes, and fuller brows",
-            "a late teen (16–18) with taut skin, faint eye creases, and stronger jaw angle",
-            "a young adult (19–24) with tight skin texture, defined malar highlight, and subtle smile lines",
-            "an adult (25–29) with minimal dynamic lines, uniform pigmentation, and firm jaw contour",
-            "an adult (30–34) with very fine forehead lines on expression and slight under-eye shadow",
-            "a mid adult (35–39) with early crow’s feet and reduced cheek plumpness",
-            "a mid adult (40–44) with clearer nasolabial groove and early jowl hint",
-            "a mature adult (45–49) with visible marionette lines and coarser skin grain",
-            "a mature adult (50–54) with eye bags prominence and neck band onset",
-            "an older adult (55–59) with etched forehead lines and decreased skin turgor",
-            "an older adult (60–64) with deeper folds, sun spots, and thinner lips",
-            "a senior adult (65–69) with widespread rhytides and volume deflation",
-            "a senior adult (70–74) with lax lower face skin and pronounced jowls",
-            "an elderly adult (75+) with deep facial furrows, diffuse age spots, and reduced muscle tone",
+        P["level4"] = [
+            "a photograph of a newborn to 1-year-old infant with extremely round face, disproportionately large head, fontanelle (soft spot) may be visible, "
+            "undefined facial features, minimal neck definition, and unfocused gaze.",
+            "a photograph of a 1-2 year old toddler with very round cheeks, small but slightly more defined features than newborns, "
+            "beginning facial expressions, first teeth may be visible, and beginning neck definition.",
+            "a photograph of a 3-5 year old preschooler with distinctly childlike proportions, rounded cheeks but more definition than toddlers, "
+            "primary teeth, more controlled facial expressions, defined eyes relative to face, and characteristic preschool appearance.",
+            "a photograph of a 6-8 year old child with less facial roundness than younger children, early mixed dentition, more proportional features, "
+            "defined nose and ears, and the characteristic appearance of early school age.",
+            "a photograph of a 9-11 year old with faces beginning transition from child to adolescent, mixed dentition well established, "
+            "more defined chin, losing the last of baby fat in cheeks, and pre-pubertal appearance.",
+            "a photograph of a 12-14 year old early teenager with early pubertal changes, possible acne, growth in nose and jaw, "
+            "early facial hair in males, and early adolescent features.",
+            "a photograph of a 15-16 year old teenager with substantial pubertal development, near-adult facial proportions, "
+            "established acne in many cases, significant growth in facial features, facial hair in males, and mid-adolescent appearance.",
+            "a photograph of a 17-18 year old late teenager with nearly complete adolescent development, almost adult facial structure, "
+            "defined jawline especially in males, possible residual acne, and late adolescent appearance approaching adulthood.",
+            "a photograph of a 19-21 year old young adult with newly mature features, complete facial development, fresh complexion, "
+            "optimal elasticity, and vibrant early adulthood appearance.",
+            "a photograph of a 22-25 year old adult with fully established facial structure, optimal skin condition, defined contours, "
+            "no visible aging signs, and the characteristic appearance of young adulthood.",
+            "a photograph of a 26-30 year old adult with mature features, earliest very fine lines around eyes when smiling, "
+            "excellent skin condition but first subtle elasticity changes.",
+            "a photograph of a 31-35 year old adult with earliest fine lines at rest, slight reduction in facial plumpness, and pre-middle-age appearance.",
+            "a photograph of a 36-42 year old adult with first definitive aging signs, established fine lines around eyes and possible forehead, "
+            "slight skin laxity changes, and early middle age appearance.",
+            "a photograph of a 43-50 year old adult with clear aging progression, deeper nasolabial folds, possible marionette lines, "
+            "decreased skin elasticity, possible early jowl formation, and middle age appearance.",
+            "a photograph of a 51-60 year old adult with pronounced wrinkles, visible volume loss, neck laxity, often gray hair, "
+            "and the characteristic appearance of mature middle age.",
+            "a photograph of a 61+ year old senior with significant wrinkles, clear volume loss, defined jowls, neck laxity and banding, "
+            "thinning skin with age spots, and advanced age appearance."
         ]
     return P
+
 
 def _prompts_medical(levels: List[int]) -> Dict[str, List[str]]:
     """Adjective-rich but domain-agnostic imaging cues (edges, margin, density, texture)."""
