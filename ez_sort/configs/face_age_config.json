@@ -1,0 +1,39 @@
+
+{
+  "clip_model": "ViT-B/32",
+  "temperature": 0.1,
+  "domain": "face",
+  "range_description": "0-60+ years",
+  "k_buckets": 5,
+  "elo_k": 32,
+  "r_base_min": 1200.0,
+  "r_base_max": 1800.0,
+  "delta_b": 75.0,
+  "theta_0": 0.15,
+  "alpha": 0.3,
+  "beta": 0.9,
+  "gamma": 1.2,
+  "phi_base": 2.0,
+  "hierarchical_prompts": {
+    "level_1": [
+      "a photograph of a baby or infant with rounded cheeks and large forehead",
+      "a photograph of a child or teenager with developing facial features"
+    ],
+    "level_2": [
+      "a photograph of a baby (0-2 years) with very soft facial features and chubby cheeks",
+      "a photograph of a young child (3-7 years) with childlike facial proportions",
+      "a photograph of a teenager (8-17 years) with adolescent facial features",
+      "a photograph of a young adult (18-35 years) with mature but youthful features"
+    ],
+    "level_3": [
+      "a photograph of a baby (0-1 years) with very soft and rounded facial features",
+      "a photograph of a toddler (2-4 years) with developing facial structure",
+      "a photograph of a child (5-9 years) with clear childlike features",
+      "a photograph of a pre-teen (10-13 years) with transitional facial features",
+      "a photograph of a teenager (14-18 years) with adolescent characteristics",
+      "a photograph of a young adult (19-30 years) with fully developed youthful features",
+      "a photograph of an adult (31-50 years) with mature facial characteristics",
+      "a photograph of an older adult (50+ years) with visible signs of aging"
+    ]
+  }
+}

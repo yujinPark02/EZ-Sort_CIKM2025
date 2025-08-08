@@ -1,0 +1,224 @@
+# requirements.txt
+torch>=1.9.0
+torchvision>=0.10.0
+git+https://github.com/openai/CLIP.git
+streamlit>=1.25.0
+plotly>=5.15.0
+pandas>=1.5.0
+numpy>=1.21.0
+Pillow>=8.3.0
+scipy>=1.7.0
+scikit-learn>=1.0.0
+tqdm>=4.62.0
+
+# requirements-dev.txt (for development)
+pytest>=6.2.0
+pytest-cov>=2.12.0
+black>=21.7.0
+flake8>=3.9.0
+mypy>=0.910
+jupyter>=1.0.0
+matplotlib>=3.5.0
+seaborn>=0.11.0
+
+# setup.py
+from setuptools import setup, find_packages
+
+with open("README.md", "r", encoding="utf-8") as fh:
+    long_description = fh.read()
+
+with open("requirements.txt", "r", encoding="utf-8") as fh:
+    requirements = [line.strip() for line in fh if line.strip() and not line.startswith("#")]
+
+setup(
+    name="ez-sort",
+    version="1.0.0",
+    author="Yujin Park, Haejun Chung, Ikbeom Jang",
+    author_email="your-email@university.edu",
+    description="Efficient Pairwise Comparison via Zero-Shot CLIP-Based Pre-Ordering and Human-in-the-Loop Sorting",
+    long_description=long_description,
+    long_description_content_type="text/markdown",
+    url="https://github.com/your-username/ez-sort",
+    packages=find_packages(),
+    classifiers=[
+        "Development Status :: 4 - Beta",
+        "Intended Audience :: Science/Research",
+        "License :: OSI Approved :: MIT License",
+        "Operating System :: OS Independent",
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Topic :: Scientific/Engineering :: Artificial Intelligence",
+        "Topic :: Scientific/Engineering :: Human Machine Interfaces",
+    ],
+    python_requires=">=3.8",
+    install_requires=requirements,
+    extras_require={
+        "dev": [
+            "pytest>=6.2.0",
+            "pytest-cov>=2.12.0",
+            "black>=21.7.0",
+            "flake8>=3.9.0",
+            "mypy>=0.910",
+            "jupyter>=1.0.0",
+        ],
+        "viz": [
+            "matplotlib>=3.5.0",
+            "seaborn>=0.11.0",
+        ],
+    },
+    entry_points={
+        "console_scripts": [
+            "ez-sort=ez_sort_cli:main",
+            "ez-sort-web=ez_sort_web:main",
+        ],
+    },
+    include_package_data=True,
+    package_data={
+        "ez_sort": ["configs/*.json", "examples/*.csv"],
+    },
+    keywords="pairwise comparison, annotation, CLIP, human-in-the-loop, active learning",
+    project_urls={
+        "Bug Reports": "https://github.com/your-username/ez-sort/issues",
+        "Source": "https://github.com/your-username/ez-sort",
+        "Documentation": "https://github.com/your-username/ez-sort/wiki",
+    },
+)
+
+# MANIFEST.in
+include README.md
+include LICENSE
+include requirements.txt
+include requirements-dev.txt
+recursive-include ez_sort/configs *.json
+recursive-include ez_sort/examples *.csv
+recursive-include docs *.md *.rst
+recursive-exclude * __pycache__
+recursive-exclude * *.py[co]
+
+# .gitignore
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# celery beat schedule file
+celerybeat-schedule
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# EZ-Sort specific
+results/
+data/
+*.json
+*.csv
+!configs/*.json
+!examples/*.csv
+
+# Streamlit
+.streamlit/secrets.toml

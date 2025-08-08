@@ -1,0 +1,29 @@
+{
+  "clip_model": "ViT-B/32",
+  "temperature": 0.1,
+  "domain": "quality",
+  "range_description": "low to high quality",
+  "k_buckets": 4,
+  "elo_k": 28,
+  "r_base_min": 1100.0,
+  "r_base_max": 1700.0,
+  "delta_b": 60.0,
+  "theta_0": 0.12,
+  "alpha": 0.35,
+  "beta": 0.85,
+  "gamma": 1.3,
+  "phi_base": 1.8,
+  "hierarchical_prompts": {
+    "level_1": [
+      "a high quality, sharp and well-composed photograph",
+      "a low quality, blurry or poorly composed photograph"
+    ],
+    "level_2": [
+      "an excellent quality photograph with perfect sharpness and professional composition",
+      "a good quality photograph with minor technical imperfections but acceptable clarity",
+      "a poor quality photograph with noticeable blur, noise, or composition issues",
+      "a very poor quality photograph with major technical problems and severe quality issues"
+    ]
+  }
+}
+

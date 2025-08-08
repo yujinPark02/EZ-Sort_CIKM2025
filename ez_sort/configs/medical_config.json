@@ -1,0 +1,29 @@
+{
+  "clip_model": "ViT-B/32",
+  "temperature": 0.1,
+  "domain": "medical",
+  "range_description": "normal to severe pathology",
+  "k_buckets": 3,
+  "elo_k": 24,
+  "r_base_min": 1200.0,
+  "r_base_max": 1600.0,
+  "delta_b": 50.0,
+  "theta_0": 0.1,
+  "alpha": 0.4,
+  "beta": 0.8,
+  "gamma": 1.5,
+  "phi_base": 2.2,
+  "hierarchical_prompts": {
+    "level_1": [
+      "a medical image showing normal, healthy anatomical structures",
+      "a medical image showing abnormal or pathological findings"
+    ],
+    "level_2": [
+      "a medical image with completely normal anatomy and no visible abnormalities",
+      "a medical image with mild abnormalities or early pathological changes",
+      "a medical image with moderate pathological findings requiring attention",
+      "a medical image with severe abnormalities or advanced pathological conditions"
+    ]
+  }
+}
+
