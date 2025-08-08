@@ -3,6 +3,7 @@
 **EZ-Sort** is an efficient pairwise comparison framework that reduces human annotation effort by up to 90% using CLIP-based pre-ordering and uncertainty-aware comparison selection.
 
 📄 **Paper**: *EZ-Sort: Efficient Pairwise Comparison via Zero-Shot CLIP-Based Pre-Ordering and Human-in-the-Loop Sorting* (CIKM 2025)
+<img width="960" height="383" alt="image" src="https://github.com/user-attachments/assets/501f4688-4017-4c79-bc8c-ce301576c8a8" />
 
 ## ✨ Key Features
 
