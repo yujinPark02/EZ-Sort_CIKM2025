@@ -1,215 +1,398 @@
 """
-EZ-Sort Web Interface using Streamlit
-Provides an interactive web interface for human annotation using the EZ-Sort framework.
+EZ-Sort Web Interface using Streamlit (Full, fixed, English)
+- Robust session_state initialization (fixes: AttributeError: st.session_state has no attribute "ui")
+- Keyboard shortcuts: A (Image A), B (Image B), E (Equal), K (Skip) — no extra packages
+- Face domain: Younger vs Older policy (affects UI wording and accuracy evaluation)
+- Accuracy evaluation when labels exist (numeric); skipped otherwise
+- Sample-size queue shaping and clear reporting
+- Hierarchical prompts LEVEL 1..4 with detailed, descriptive adjectives across domains
 """
-import streamlit as st
-import pandas as pd
-import numpy as np
-from PIL import Image
-import os
+
 import json
 import time
-from typing import Dict, List, Any
-import plotly.graph_objects as go
+from typing import Dict, Any, Optional, List
+
+import numpy as np
+import pandas as pd
+from PIL import Image
+
+import streamlit as st
 import plotly.express as px
+import streamlit.components.v1 as components
+
+# Your EZ-Sort backend
 from ez_sort import EZSortDataset, EZSortAnnotator, EZSortConfig
-# (추가) 키보드 입력용
-try:
-    from streamlit_keypress import keypress  # pip install streamlit-keypress
-    HAS_KEYPRESS = True
-except Exception:
-    import streamlit.components.v1 as components
-    HAS_KEYPRESS = False
-# Page config
+
+
+# =========================
+# Page Config & CSS
+# =========================
 st.set_page_config(
     page_title="EZ-Sort: Efficient Pairwise Annotation Tool",
     page_icon="🎯",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-# Custom CSS
-st.markdown("""
+def inject_base_css():
+    st.markdown(
+        """
 <style>
 .main-header {
-    font-size: 2.5rem;
-    font-weight: 700;
-    color: #1e3a8a;
-    text-align: center;
-    margin-bottom: 2rem;
+  font-size: 2.2rem; font-weight: 800; color: #1e3a8a;
+  text-align: center; margin: 0.2rem 0 1.0rem;
 }
-
-.sub-header {
-    font-size: 1.5rem;
-    font-weight: 600;
-    color: #374151;
-    margin: 1rem 0;
-}
-
+.sub-header { font-size: 1.15rem; font-weight: 800; color: #374151; margin: 0.25rem 0 0.6rem; }
 .metric-card {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    padding: 1rem;
-    border-radius: 10px;
-    color: white;
-    text-align: center;
-    margin: 0.5rem 0;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  padding: 0.75rem; border-radius: 10px; color: white; text-align: center; margin: 0.4rem 0;
 }
-
-.comparison-box {
-    border: 2px solid #e5e7eb;
-    border-radius: 10px;
-    padding: 1rem;
-    margin: 1rem 0;
-    text-align: center;
-}
-
 .image-container {
-    border: 3px solid #d1d5db;
-    border-radius: 10px;
-    padding: 1rem;
-    margin: 1rem;
-    text-align: center;
-    transition: border-color 0.3s;
+  border: 2px solid #d1d5db; border-radius: 10px; padding: 0.25rem; margin: 0.25rem; text-align: center;
+  transition: border-color 0.25s, background-color 0.25s;
 }
-
-.image-container:hover {
-    border-color: #3b82f6;
-}
-
-.selected {
-    border-color: #10b981 !important;
-    background-color: #ecfdf5;
-}
-
-.confidence-badge {
-    display: inline-block;
-    padding: 0.25rem 0.75rem;
-    border-radius: 50px;
-    font-size: 0.875rem;
-    font-weight: 600;
-}
-
+.image-container:hover { border-color: #3b82f6; }
+.confidence-badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.82rem; font-weight: 800; }
 .confidence-high { background-color: #dcfce7; color: #166534; }
 .confidence-medium { background-color: #fef3c7; color: #92400e; }
 .confidence-low { background-color: #fee2e2; color: #991b1b; }
+kbd {
+  display:inline-block; padding:0.15rem 0.4rem; font-size:0.85rem; line-height:1; color:#111827;
+  background:#F3F4F6; border:1px solid #D1D5DB; border-bottom-width:2px; border-radius:6px; margin: 0 0.05rem;
+}
 </style>
-""", unsafe_allow_html=True)
+""",
+        unsafe_allow_html=True,
+    )
+
+def inject_dynamic_image_css(max_height_px: int, width_pct: int):
+    st.markdown(
+        f"""
+<style>
+[data-testid="stImage"] img {{
+  max-height: {max_height_px}px !important;
+  height: auto !important;
+  max-width: {width_pct}%;
+  object-fit: contain !important;
+}}
+</style>
+""",
+        unsafe_allow_html=True,
+    )
+
+inject_base_css()
 
 
-class SessionState:
-    """Manage session state for the annotation interface"""
-    
-    def __init__(self):
-        if 'annotator' not in st.session_state:
-            st.session_state.annotator = None
-        if 'current_pair' not in st.session_state:
-            st.session_state.current_pair = None
-        if 'comparison_queue' not in st.session_state:
-            st.session_state.comparison_queue = []
-        if 'results' not in st.session_state:
-            st.session_state.results = {
-                'comparisons': [],
-                'human_queries': 0,
-                'auto_decisions': 0,
-                'ranking_history': []
-            }
-        if 'current_step' not in st.session_state:
-            st.session_state.current_step = 0
+# =========================
+# Session-State (robust init)
+# =========================
+def ensure_session_state():
+    """Ensure all required keys exist before any access."""
+    ss = st.session_state
+    ss.setdefault("annotator", None)
+    ss.setdefault("dataset", None)
+    ss.setdefault("comparison_queue", [])
+    ss.setdefault("current_step", 0)
+    ss.setdefault("subset_indices", [])
+    ss.setdefault("results", {
+        "comparisons": [],    # {step, idx1, idx2, preference, type, uncertainty, correct?}
+        "human_queries": 0,
+        "auto_decisions": 0,
+        "n_eval": 0,
+        "n_correct": 0,
+    })
+    ss.setdefault("ui", {
+        "face_policy": "younger",   # "younger" | "older"
+        "equal_tolerance": 1.0,     # label units (e.g., years)
+    })
+
+ensure_session_state()  # <<< this prevents the AttributeError you saw
 
 
-def load_dataset(csv_path: str, image_dir: str, image_col: str, label_col: str) -> EZSortDataset:
-    """Load dataset with error handling"""
+# =========================
+# Keyboard (A/B/E/K)
+# =========================
+
+def capture_hotkey() -> Optional[str]:
+    """
+    Version-agnostic global hotkey capture (A/B/E/K).
+    - Uses a hidden text_input with a unique placeholder so JS can find it.
+    - No components.html key=... (works on older Streamlit).
+    - No extra packages. No Enter required.
+    """
+    placeholder = "__EZ_HOTKEY__"  # local, no global needed
+
+    # Hidden buffer input that JS will write into
+    st.text_input(
+        "Hotkey buffer",
+        value="",
+        key="__hotkey__",
+        max_chars=1,
+        label_visibility="collapsed",
+        placeholder=placeholder,
+    )
+
+    # Inject a small script that writes A/B/E/K into the hidden input and triggers a rerun
+    components.html(
+        f"""
+        <script>
+        (function() {{
+          if (window.__ez_hotkey_inited__) return;
+          window.__ez_hotkey_inited__ = true;
+
+          const setVal = (k) => {{
+            try {{
+              const doc = window.parent?.document || document;
+              const el = doc.querySelector('input[placeholder="{placeholder}"]');
+              if (!el) return;
+              el.value = k;
+              el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            }} catch (e) {{}}
+          }};
+
+          const onKey = (e) => {{
+            const k = (e.key || '').toUpperCase();
+            if (['A','B','E','K'].includes(k)) setVal(k);
+          }};
+
+          // Listen on both iframe and parent (when possible)
+          window.addEventListener('keydown', onKey, true);
+          try {{ window.parent.document.addEventListener('keydown', onKey, true); }} catch (e) {{}}
+        }})();
+        </script>
+        """,
+        height=0,
+        scrolling=False,
+    )
+
+    v = st.session_state.get("__hotkey__", "")
+    if v:
+        st.session_state["__hotkey__"] = ""  # clear after read to avoid repeats
+        return v.strip().upper()[:1]
+    return None
+
+
+
+
+# =========================
+# Dataset & Config
+# =========================
+def load_dataset(csv_path: str, image_dir: str, image_col: str, label_col: str) -> Optional[EZSortDataset]:
     try:
-        dataset = EZSortDataset(csv_path, image_dir, image_col, label_col)
-        return dataset
+        return EZSortDataset(csv_path, image_dir, image_col, label_col)
     except Exception as e:
         st.error(f"Error loading dataset: {e}")
         return None
 
 
-def create_config_from_ui() -> EZSortConfig:
-    """Create EZSortConfig from UI inputs"""
-    
-    # Domain selection
-    domain = st.sidebar.selectbox(
-        "Domain Type",
-        ["face", "medical", "historical", "quality", "custom"],
-        help="Select the type of data you're annotating"
-    )
-    
-    # Bucket configuration
-    k_buckets = st.sidebar.slider("Number of Buckets", 3, 7, 5)
-    
-    # Advanced parameters
-    with st.sidebar.expander("Advanced Parameters"):
-        theta_0 = st.slider("Base Uncertainty Threshold", 0.05, 0.3, 0.15)
-        alpha = st.slider("Budget Sensitivity (α)", 0.1, 0.5, 0.3)
-        beta = st.slider("Accuracy Sensitivity (β)", 0.5, 1.0, 0.9)
-        elo_k = st.slider("Elo Learning Rate", 16, 64, 32)
-    
-    # Prompt configuration
-    st.sidebar.subheader("Hierarchical Prompts")
-    
+def _prompts_face(levels: List[int]) -> Dict[str, List[str]]:
+    """
+    Detailed, adjective-rich prompts for face-age perception.
+    L1..L4; each entry is an explicit textual description with visual cues only.
+    """
+    P = {}
+    if 1 in levels:
+        P["level_1"] = [
+            # Younger vs Older (binary)
+            "a frontal portrait of a younger-looking person with smooth skin, rounder cheeks, larger eyes-to-face ratio, minimal facial hair, and a soft jawline",
+            "a frontal portrait of an older-looking person with coarse skin texture, prominent wrinkles (crow's feet, forehead lines), deeper nasolabial folds, and a defined jawline",
+        ]
+    if 2 in levels:
+        P["level_2"] = [
+            "an infant or toddler (0–4) with plump cheeks, sparse eyebrows, fine hair, and very smooth skin",
+            "a child (5–12) with soft features, smaller nose bridge, and minimal facial definition",
+            "a teenager (13–19) with emerging jawline, occasional acne, fuller eyebrows, and youthful skin",
+            "a young adult (20–35) with firm skin, clear jawline, limited fine lines, and even skin tone",
+            "a middle-aged adult (36–55) with mild forehead lines, subtle marionette lines, and slight eye bags",
+            "an older adult (56+) with visible wrinkles, age spots, thinner lips, and reduced facial volume",
+        ]
+    if 3 in levels:
+        P["level_3"] = [
+            "an infant (0–1) with very round face, tiny nose, and glossy, poreless skin",
+            "a toddler (2–3) with chubby cheeks, fine baby hairs, and wide eyes",
+            "an early child (4–6) with childlike proportions and smooth, uniform skin tone",
+            "a child (7–9) with subtle facial definition and small, rounded jaw",
+            "a pre-teen (10–12) with transitional features and slightly taller nose bridge",
+            "a teen (13–15) with youthful texture, possible acne, and fuller eyebrows",
+            "a late teen (16–18) with sharper features, faint smile lines, and resilient skin",
+            "a young adult (19–24) with defined jawline, tight skin, and high cheek highlight",
+            "an adult (25–34) with faint dynamic lines and balanced facial volume",
+            "a mid adult (35–44) with fine crow’s feet and subtle forehead lines",
+            "a mature adult (45–54) with visible nasolabial folds and early neck lines",
+            "an older adult (55–64) with reduced skin elasticity and pronounced folds",
+            "a senior adult (65–74) with deeper wrinkles, age spots, and volume loss",
+            "an elderly adult (75+) with pronounced skin laxity and deep-set lines",
+        ]
+    if 4 in levels:
+        P["level_4"] = [
+            # Fine-grained, purely visual: texture, volume, landmarks
+            "a baby (0–6 months) with extremely smooth, translucent skin, almost no facial definition, and sparse hair",
+            "a baby (7–18 months) with soft round cheeks, low brow ridge, and glossy skin sheen",
+            "a toddler (19–36 months) with rounded jaw, short philtrum, and minimal skin texture",
+            "an early child (4–6) with gentle cheek fullness, small nose tip, and bright sclera",
+            "a child (7–9) with mild cheek contour, slightly raised brow ridge, and matte skin",
+            "a pre-teen (10–12) with longer face ratio, clearer jaw outline, and smooth pores",
+            "a teen (13–15) with visible T-zone shine, occasional blemishes, and fuller brows",
+            "a late teen (16–18) with taut skin, faint eye creases, and stronger jaw angle",
+            "a young adult (19–24) with tight skin texture, defined malar highlight, and subtle smile lines",
+            "an adult (25–29) with minimal dynamic lines, uniform pigmentation, and firm jaw contour",
+            "an adult (30–34) with very fine forehead lines on expression and slight under-eye shadow",
+            "a mid adult (35–39) with early crow’s feet and reduced cheek plumpness",
+            "a mid adult (40–44) with clearer nasolabial groove and early jowl hint",
+            "a mature adult (45–49) with visible marionette lines and coarser skin grain",
+            "a mature adult (50–54) with eye bags prominence and neck band onset",
+            "an older adult (55–59) with etched forehead lines and decreased skin turgor",
+            "an older adult (60–64) with deeper folds, sun spots, and thinner lips",
+            "a senior adult (65–69) with widespread rhytides and volume deflation",
+            "a senior adult (70–74) with lax lower face skin and pronounced jowls",
+            "an elderly adult (75+) with deep facial furrows, diffuse age spots, and reduced muscle tone",
+        ]
+    return P
+
+def _prompts_medical(levels: List[int]) -> Dict[str, List[str]]:
+    """Adjective-rich but domain-agnostic imaging cues (edges, margin, density, texture)."""
+    P = {}
+    if 1 in levels:
+        P["level_1"] = [
+            "a medical image with normal anatomy, uniform background, sharp boundaries, and no focal abnormality",
+            "a medical image with abnormal findings, disrupted anatomy, focal opacity or defect, and atypical texture",
+        ]
+    if 2 in levels:
+        P["level_2"] = [
+            "no visible abnormality: crisp structures, symmetric appearance, homogeneous intensity",
+            "mild abnormality: small focal change, well-circumscribed margins, subtle density shift",
+            "moderate abnormality: multifocal changes, partially ill-defined margins, heterogeneous texture",
+            "severe abnormality: diffuse involvement, spiculated or invasive margins, marked intensity distortion",
+        ]
+    if 3 in levels:
+        P["level_3"] = [
+            "normal variant patterns: anatomical landmarks intact, smooth contours, low noise",
+            "localized lesion: round/oval, smooth or lobulated edge, mild contrast uptake",
+            "regional disease: segmental involvement, reticular or granular texture, mass effect",
+            "diffuse severe disease: widespread opacities, architectural distortion, edema-like signal",
+        ]
+    if 4 in levels:
+        P["level_4"] = [
+            "artifact or noise only: ringing, motion streaks, but preserved anatomical planes",
+            "tiny lesion: <5mm, high contrast to background, sharp rim, no surrounding edema",
+            "complex lesion: mixed signal core, rim enhancement, peri-lesional edema or halo",
+            "infiltrative pattern: ill-defined spicules, vessel/ductal tracking, mass effect on adjacent tissue",
+        ]
+    return P
+
+def _prompts_quality(levels: List[int]) -> Dict[str, List[str]]:
+    """Perceptual image quality with clear photographic adjectives."""
+    P = {}
+    if 1 in levels:
+        P["level_1"] = [
+            "a high-quality photo: tack-sharp focus, low noise, balanced exposure, accurate color, clean composition",
+            "a low-quality photo: motion blur or defocus, high noise, clipped highlights or crushed shadows, poor framing",
+        ]
+    if 2 in levels:
+        P["level_2"] = [
+            "excellent: crisp micro-contrast, natural white balance, no artifacts, strong subject isolation",
+            "good: slight softness or mild ISO noise, minor clipping, acceptable framing",
+            "poor: noticeable blur or grain, color cast, uneven exposure, distracting background",
+            "very poor: heavy blur, severe noise/banding, harsh clipping, chaotic composition",
+        ]
+    if 3 in levels:
+        P["level_3"] = [
+            "razor-sharp edges, rich tonal gradation, smooth bokeh, no halos",
+            "minor softness, fine luminance noise, small haloing, stable tones",
+            "clear blur trails or smear, blotchy chroma noise, haloing/ghosting",
+            "severe smear, streak noise, posterization, extreme vignetting",
+        ]
+    if 4 in levels:
+        P["level_4"] = [
+            "studio-grade clarity: high MTF, precise WB, no compression artifacts, controlled highlights",
+            "near-studio: light noise, gentle roll-off, mild compression, clean edges",
+            "consumer: visible sharpening halos, WB drift, aggressive noise reduction artifacts",
+            "degraded: macro-blocking, color bleeding, blown highlights, muddy shadows",
+        ]
+    return P
+
+def _prompts_historical(levels: List[int]) -> Dict[str, List[str]]:
+    """Visual period cues for dating historical color images (generic, not dataset-specific)."""
+    P = {}
+    if 1 in levels:
+        P["level_1"] = [
+            "a historical photo with earlier aesthetic cues: muted palette, coarse grain, simple styling",
+            "a historical photo with later aesthetic cues: more saturated palette, finer grain, modern styling",
+        ]
+    if 2 in levels:
+        P["level_2"] = [
+            "earlier era: subdued colors, thick film grain, conservative fashion, rounded car silhouettes",
+            "mid era: moderate saturation, cleaner grain, transitional fashion, boxier industrial design",
+            "later era: vivid colors, fine grain, contemporary fashion, angular product design",
+        ]
+    if 3 in levels:
+        P["level_3"] = [
+            "pre-50s aesthetic: sepia tint, heavy grain, soft focus, vintage signage and typography",
+            "60s-70s aesthetic: warm color cast, moderate grain, bold patterns, chrome trim on vehicles",
+            "80s-90s aesthetic: neutral cast, finer grain, synthetic fabrics, squared electronics",
+            "post-90s aesthetic: crisp edges, high saturation, modern fonts, compact electronics",
+        ]
+    if 4 in levels:
+        P["level_4"] = [
+            "very early: orthographic look, uneven exposure, soft corners, hand-painted signboards",
+            "early-mid: muted dyes, noticeable grain clumps, film halation around highlights",
+            "mid-late: improved dye stability, cleaner edges, period-specific hairstyles and eyewear",
+            "late: strong anti-halation, high resolving power, contemporary silhouettes and materials",
+        ]
+    return P
+
+def build_hierarchical_prompts(domain: str, levels: List[int]) -> Optional[Dict[str, List[str]]]:
     if domain == "face":
-        prompts = {
-            "level_1": [
-                "a photograph of a baby or infant with rounded cheeks and large forehead",
-                "a photograph of a child or teenager with developing facial features"
-            ],
-            "level_2": [
-                "a photograph of a baby (0-2 years) with very soft facial features",
-                "a photograph of a young child (3-7 years) with childlike proportions",
-                "a photograph of a teenager (8-17 years) with adolescent features",
-                "a photograph of a young adult (18-35 years) with mature features"
-            ],
-            "level_3": [
-                "a photograph of a baby (0-1 years) with very soft and rounded features",
-                "a photograph of a toddler (2-4 years) with developing structure",
-                "a photograph of a child (5-9 years) with clear childlike features",
-                "a photograph of a pre-teen (10-13 years) with transitional features",
-                "a photograph of a teenager (14-18 years) with adolescent characteristics",
-                "a photograph of a young adult (19-30 years) with youthful features",
-                "a photograph of an adult (31-50 years) with mature characteristics",
-                "a photograph of an older adult (50+ years) with signs of aging"
-            ]
-        }
-        range_desc = "0-60+ years"
-    elif domain == "medical":
-        prompts = {
-            "level_1": [
-                "a medical image showing normal/healthy condition",
-                "a medical image showing abnormal/pathological condition"
-            ],
-            "level_2": [
-                "a medical image with no visible abnormalities",
-                "a medical image with mild abnormalities",
-                "a medical image with moderate abnormalities", 
-                "a medical image with severe abnormalities"
-            ]
-        }
-        range_desc = "normal to severe pathology"
-        k_buckets = 3  # Fewer buckets for medical
-    elif domain == "quality":
-        prompts = {
-            "level_1": [
-                "a high quality, clear and well-composed image",
-                "a low quality, blurry or poorly composed image"
-            ],
-            "level_2": [
-                "an excellent quality image with perfect clarity",
-                "a good quality image with minor imperfections",
-                "a poor quality image with noticeable issues",
-                "a very poor quality image with major problems"
-            ]
-        }
-        range_desc = "low to high quality"
-    else:
-        # Custom prompts
-        st.sidebar.info("For custom domain, modify the prompts in the configuration file")
-        prompts = None
-        range_desc = "custom range"
-    
-    config = EZSortConfig(
+        return _prompts_face(levels)
+    if domain == "medical":
+        return _prompts_medical(levels)
+    if domain == "quality":
+        return _prompts_quality(levels)
+    if domain == "historical":
+        return _prompts_historical(levels)
+    # custom: user may edit later
+    return None
+
+
+def create_config_from_ui() -> EZSortConfig:
+    """
+    Builds EZSortConfig from sidebar.
+    NOTE: we defensively (re)initialize st.session_state.ui here too,
+    so this function is safe to call even if ensure_session_state() was removed.
+    """
+    st.session_state.setdefault("ui", {"face_policy": "younger", "equal_tolerance": 1.0})
+
+    domain = st.sidebar.selectbox("Domain Type", ["face", "medical", "historical", "quality", "custom"])
+    k_buckets = st.sidebar.slider("Number of Buckets (for CLIP pre-ordering)", 3, 7, 5)
+
+    with st.sidebar.expander("Advanced Parameters"):
+        theta_0 = st.slider("Base Uncertainty Threshold", 0.05, 0.30, 0.15)
+        alpha   = st.slider("Budget Sensitivity (α)", 0.10, 0.50, 0.30)
+        beta    = st.slider("Accuracy Sensitivity (β)", 0.50, 1.00, 0.90)
+        elo_k   = st.slider("Elo Learning Rate (K)", 8, 64, 32)
+
+    # Policy and prompts up to Level 4 with rich adjectives
+    levels = [1, 2, 3, 4]
+    prompts = build_hierarchical_prompts(domain, levels)
+    range_desc = {
+        "face": "0–80+ years (visual aging cues only)",
+        "medical": "normal → severe pathology (margins, density, texture)",
+        "quality": "very poor → studio-grade photographic quality",
+        "historical": "early → late period visual cues",
+        "custom": "custom range",
+    }[domain]
+
+    if domain == "face":
+        st.session_state.ui["face_policy"] = st.sidebar.radio(
+            "Face Comparison Policy", ["younger", "older"],
+            help="Decide whether the preferred image is the one that looks younger or older.",
+            index=0 if st.session_state.ui.get("face_policy","younger") == "younger" else 1
+        )
+
+    if domain == "medical":
+        k_buckets = min(k_buckets, 4)
+
+    return EZSortConfig(
         domain=domain,
         range_description=range_desc,
         hierarchical_prompts=prompts,
@@ -217,333 +400,408 @@ def create_config_from_ui() -> EZSortConfig:
         theta_0=theta_0,
         alpha=alpha,
         beta=beta,
-        elo_k=elo_k
+        elo_k=elo_k,
     )
-    
-    return config
 
 
-def display_comparison_interface(annotator: EZSortAnnotator, idx1: int, idx2: int):
-    """Display the pairwise comparison interface"""
-    
-    st.markdown('<div class="sub-header">🤔 Which image ranks higher?</div>', unsafe_allow_html=True)
-    
-    # Calculate uncertainty
-    uncertainty = annotator.calculate_uncertainty(idx1, idx2)
-    
-    # Uncertainty badge
-    if uncertainty > 0.7:
-        conf_class = "confidence-low"
-        conf_text = "High Uncertainty"
-    elif uncertainty > 0.4:
-        conf_class = "confidence-medium"
-        conf_text = "Medium Uncertainty"
-    else:
-        conf_class = "confidence-high"
-        conf_text = "Low Uncertainty"
-    
-    st.markdown(f"""
-    <div class="confidence-badge {conf_class}">
-        {conf_text} (Score: {uncertainty:.3f})
-    </div>
-    """, unsafe_allow_html=True)
-    
-    col1, col2 = st.columns(2)
-    
-    # Display images
-    with col1:
-        try:
-            img_path1 = annotator.dataset.get_image_path(idx1)
-            img1 = Image.open(img_path1)
-            st.image(img1, caption=f"Image A (Index: {idx1})", use_column_width=True)
-            
-            if st.button("🏆 Image A ranks higher", key="btn_a", type="primary"):
-                return 1
-                
-        except Exception as e:
-            st.error(f"Could not load image A: {e}")
-    
-    with col2:
-        try:
-            img_path2 = annotator.dataset.get_image_path(idx2)
-            img2 = Image.open(img_path2)
-            st.image(img2, caption=f"Image B (Index: {idx2})", use_column_width=True)
-            
-            if st.button("🏆 Image B ranks higher", key="btn_b", type="primary"):
-                return 0
-                
-        except Exception as e:
-            st.error(f"Could not load image B: {e}")
-    
-    # Skip button for difficult comparisons
-    col_skip1, col_skip2, col_skip3 = st.columns([1, 1, 1])
-    with col_skip2:
-        if st.button("⏭️ Skip this comparison", key="btn_skip"):
-            return "skip"
-    
+# =========================
+# UI Helpers / Dashboard
+# =========================
+def display_progress_dashboard(results: Dict[str, Any], annotator: EZSortAnnotator):
+    total = results["human_queries"] + results["auto_decisions"]
+    automation_rate = results["auto_decisions"] / total if total > 0 else 0.0
+    accuracy = (results["n_correct"] / results["n_eval"]) if results["n_eval"] > 0 else None
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Total Comparisons", total)
+    c2.metric("Human Queries", results["human_queries"])
+    c3.metric("Auto Decisions", results["auto_decisions"])
+    c4.metric("Evaluated (labels present)", results["n_eval"])
+    c5.metric("Accuracy", "-" if accuracy is None else f"{accuracy*100:.1f}%")
+
+    if results["comparisons"]:
+        df_hist = pd.DataFrame(results["comparisons"])
+        if "uncertainty" in df_hist:
+            fig = px.line(
+                df_hist, x="step", y="uncertainty", color="type",
+                title="Uncertainty over time (human vs auto)",
+                labels={"uncertainty": "uncertainty (0=confident, 1=uncertain)", "step": "step"},
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        if hasattr(annotator, "bucket_assignments") and annotator.bucket_assignments is not None:
+            counts = np.bincount(annotator.bucket_assignments)
+            fig_b = px.bar(
+                x=list(range(len(counts))), y=counts,
+                title="CLIP Pre-ordering: Bucket Distribution",
+                labels={"x": "bucket id", "y": "count"},
+            )
+            st.plotly_chart(fig_b, use_container_width=True)
+
+    with st.expander("Uncertainty vs Accuracy (what they mean)"):
+        st.markdown(
+            "- **Uncertainty**: how hard the model thinks a pair is (near 0.5 predicted win-probability).  \n"
+            "- **Accuracy**: how often your human decision matches the ground-truth label rule (when labels exist).  \n"
+            "They correlate (hard pairs are often wrong) but **they are not the same metric**."
+        )
+
+
+def export_results(results: Dict[str, Any], dataset: EZSortDataset):
+    st.subheader("Export Results")
+    fmt = st.selectbox("Export Format", ["CSV", "JSON"])
+    if st.button("Save"):
+        if fmt == "CSV":
+            comp_df = pd.DataFrame(results["comparisons"])
+            final_ranking = results.get("final_ranking", [])
+            rank_df = pd.DataFrame({
+                "image_index": final_ranking,
+                "rank_position": range(len(final_ranking)),
+                "image_path": [dataset.image_paths[i] for i in final_ranking] if final_ranking else [],
+            })
+            st.download_button("Download Comparisons CSV", comp_df.to_csv(index=False), "ez_sort_comparisons.csv", "text/csv")
+            st.download_button("Download Ranking CSV", rank_df.to_csv(index=False), "ez_sort_ranking.csv", "text/csv")
+        else:
+            st.download_button("Download JSON", json.dumps(results, indent=2), "ez_sort_results.json", "application/json")
+
+
+# =========================
+# Label & Accuracy Helpers
+# =========================
+def _to_float(x) -> Optional[float]:
+    try:
+        if x is None: return None
+        if isinstance(x, (int, float)): return float(x)
+        s = str(x).strip()
+        if s == "" or s.lower() in {"nan", "none"}: return None
+        return float(s)
+    except Exception:
+        return None
+
+def get_label_value(dataset: EZSortDataset, idx: int) -> Optional[float]:
+    # Try multiple access patterns, depending on your EZSortDataset implementation
+    try:
+        return _to_float(dataset.labels[idx])  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    try:
+        return _to_float(dataset.df[dataset.label_col].iloc[idx])  # type: ignore[attr-defined]
+    except Exception:
+        pass
     return None
 
+def eval_correctness_face(l1: float, l2: float, pref: float, policy: str, tol: float) -> Optional[bool]:
+    """
+    pref: 1.0 (A wins), 0.0 (B wins), 0.5 (Equal)
+    policy: 'younger' or 'older' — defines which side should be preferred
+    tol: absolute difference treated as equal (within tolerance)
+    """
+    if l1 is None or l2 is None:
+        return None
+    d = l1 - l2  # positive if A is older
+    if abs(d) <= tol:
+        return True if pref == 0.5 else False
+    if policy == "younger":
+        if pref == 1.0:   # chose A
+            return l1 < l2
+        elif pref == 0.0: # chose B
+            return l2 < l1
+        else:
+            return False
+    else:  # older
+        if pref == 1.0:
+            return l1 > l2
+        elif pref == 0.0:
+            return l2 > l1
+        else:
+            return False
 
-def display_progress_dashboard(results: Dict, annotator: EZSortAnnotator):
-    """Display progress and metrics dashboard"""
-    
-    total_comparisons = results['human_queries'] + results['auto_decisions']
-    automation_rate = results['auto_decisions'] / total_comparisons if total_comparisons > 0 else 0
-    
-    # Metrics row
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("Total Comparisons", total_comparisons)
-    with col2:
-        st.metric("Human Queries", results['human_queries'])
-    with col3:
-        st.metric("Auto Decisions", results['auto_decisions'])
-    with col4:
-        st.metric("Automation Rate", f"{automation_rate:.1%}")
-    
-    # Progress visualization
-    if len(results['comparisons']) > 0:
-        # Create comparison history chart
-        df_hist = pd.DataFrame(results['comparisons'])
-        
-        fig = px.line(
-            df_hist, 
-            x='step', 
-            y='uncertainty',
-            color='type',
-            title='Uncertainty vs. Comparison Type',
-            labels={'uncertainty': 'Uncertainty Score', 'step': 'Comparison Step'}
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Bucket distribution
-        bucket_counts = np.bincount(annotator.bucket_assignments)
-        
-        fig_buckets = px.bar(
-            x=list(range(len(bucket_counts))),
-            y=bucket_counts,
-            title='CLIP Pre-ordering: Bucket Distribution',
-            labels={'x': 'Bucket ID', 'y': 'Number of Items'}
-        )
-        
-        st.plotly_chart(fig_buckets, use_container_width=True)
+def update_accuracy_metrics(idx1: int, idx2: int, pref: float, cfg: EZSortConfig):
+    l1 = get_label_value(st.session_state.dataset, idx1)
+    l2 = get_label_value(st.session_state.dataset, idx2)
+    if l1 is None or l2 is None:
+        return  # skip evaluation if either label is missing
+
+    tol = float(st.session_state.ui.get("equal_tolerance", 1.0))
+    if cfg.domain == "face":
+        correct = eval_correctness_face(l1, l2, pref, st.session_state.ui.get("face_policy", "younger"), tol)
+    else:
+        correct = None  # For other domains we need a domain-specific rule; skipping by default.
+
+    if correct is not None:
+        st.session_state.results["n_eval"] += 1
+        st.session_state.results["n_correct"] += int(bool(correct))
 
 
-def export_results(results: Dict, dataset: EZSortDataset):
-    """Export annotation results"""
-    
-    st.subheader("📁 Export Results")
-    
-    export_format = st.selectbox("Export Format", ["CSV", "JSON"])
-    
-    if st.button("💾 Export Results"):
-        if export_format == "CSV":
-            # Create results DataFrame
-            comparisons_df = pd.DataFrame(results['comparisons'])
-            
-            # Add final ranking
-            final_ranking = results.get('final_ranking', [])
-            ranking_df = pd.DataFrame({
-                'image_index': final_ranking,
-                'rank_position': range(len(final_ranking)),
-                'image_path': [dataset.image_paths[i] for i in final_ranking] if final_ranking else []
-            })
-            
-            # Create download buttons
-            csv_comparisons = comparisons_df.to_csv(index=False)
-            csv_ranking = ranking_df.to_csv(index=False)
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.download_button(
-                    "📊 Download Comparisons CSV",
-                    csv_comparisons,
-                    "ez_sort_comparisons.csv",
-                    "text/csv"
-                )
-            with col2:
-                st.download_button(
-                    "🏆 Download Ranking CSV", 
-                    csv_ranking,
-                    "ez_sort_ranking.csv",
-                    "text/csv"
-                )
-        
-        else:  # JSON
-            json_data = json.dumps(results, indent=2)
-            st.download_button(
-                "📋 Download JSON Results",
-                json_data,
-                "ez_sort_results.json",
-                "application/json"
-            )
+# =========================
+# Elo update helper (draw-safe)
+# =========================
+def apply_elo_update_safe(annotator: EZSortAnnotator, i: int, j: int, preference: float):
+    """
+    preference: 1.0 (i wins), 0.0 (j wins), 0.5 (draw)
+    Try native draw support; otherwise emulate draw conservatively.
+    """
+    try:
+        annotator.update_elo(i, j, preference)
+        return
+    except TypeError:
+        pass
+    if preference == 0.5:
+        try:
+            old_k = getattr(annotator, "elo_k", None)
+            if old_k is not None:
+                annotator.elo_k = max(1, int(old_k // 4))
+            annotator.update_elo(i, j, 1)  # i wins
+            annotator.update_elo(j, i, 1)  # j wins back
+        except Exception:
+            pass
+        finally:
+            if old_k is not None:
+                annotator.elo_k = old_k
+    else:
+        annotator.update_elo(i, j, int(preference))
 
 
+# =========================
+# Comparison UI
+# =========================
+def display_comparison_interface(annotator: EZSortAnnotator, idx1: int, idx2: int, cfg: EZSortConfig) -> Optional[float]:
+    if cfg.domain == "face":
+        policy = st.session_state.ui.get("face_policy", "younger")
+        q = "Which face looks **younger**?" if policy == "younger" else "Which face looks **older**?"
+    else:
+        q = "Which image ranks **higher**?"
+
+    st.markdown(f'<div class="sub-header">🤔 {q}</div>', unsafe_allow_html=True)
+
+    # Uncertainty ribbon
+    uncertainty = annotator.calculate_uncertainty(idx1, idx2)
+    badge = ("confidence-low", "High Uncertainty") if uncertainty > 0.7 else \
+            ("confidence-medium", "Medium Uncertainty") if uncertainty > 0.4 else \
+            ("confidence-high", "Low Uncertainty")
+    st.markdown(
+        f'<div class="confidence-badge {badge[0]}">{badge[1]} (Score: {uncertainty:.3f})</div>',
+        unsafe_allow_html=True,
+    )
+
+    c1, c2 = st.columns(2)
+    pref = None
+
+    with c1:
+        try:
+            img1 = Image.open(annotator.dataset.get_image_path(idx1))
+            st.markdown('<div class="image-container">', unsafe_allow_html=True)
+            st.image(img1, caption=f"Image A (Index: {idx1})", use_column_width=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+            if st.button("🏆 Image A (A)", key=f"btn_a_{idx1}_{idx2}", use_container_width=True):
+                pref = 1.0
+        except Exception as e:
+            st.error(f"Could not load image A: {e}")
+
+    with c2:
+        try:
+            img2 = Image.open(annotator.dataset.get_image_path(idx2))
+            st.markdown('<div class="image-container">', unsafe_allow_html=True)
+            st.image(img2, caption=f"Image B (Index: {idx2})", use_column_width=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+            if st.button("🏆 Image B (B)", key=f"btn_b_{idx1}_{idx2}", use_container_width=True):
+                pref = 0.0
+        except Exception as e:
+            st.error(f"Could not load image B: {e}")
+
+    c_eq, c_skip = st.columns(2)
+    with c_eq:
+        if st.button("⚖️ Equal (E)", key=f"btn_equal_{idx1}_{idx2}", use_container_width=True):
+            pref = 0.5
+    with c_skip:
+        if st.button("⏭️ Skip (K)", key=f"btn_skip_{idx1}_{idx2}", use_container_width=True):
+            pref = "skip"
+
+    # Keyboard shortcuts (global)
+    key = capture_hotkey()
+    if key == "A":
+        pref = 1.0
+    elif key == "B":
+        pref = 0.0
+    elif key == "E":
+        pref = 0.5
+    elif key == "K":
+        pref = "skip"
+
+    return pref
+
+
+# =========================
+# Main App
+# =========================
 def main():
-    """Main Streamlit application"""
-    
-    # Initialize session state
-    session = SessionState()
-    
-    # Header
     st.markdown('<div class="main-header">🎯 EZ-Sort: Efficient Pairwise Annotation Tool</div>', unsafe_allow_html=True)
-    
-    st.markdown("""
-    **EZ-Sort** reduces human annotation effort by up to 90% using CLIP-based pre-ordering and uncertainty-aware comparison selection.
-    
-    📄 **Paper**: *EZ-Sort: Efficient Pairwise Comparison via Zero-Shot CLIP-Based Pre-Ordering and Human-in-the-Loop Sorting* (CIKM 2025)
-    """)
-    
-    # Sidebar configuration
-    st.sidebar.title("⚙️ Configuration")
-    
-    # Dataset input
-    st.sidebar.subheader("📂 Dataset")
-    csv_path = st.sidebar.text_input("CSV File Path", placeholder="path/to/your/dataset.csv")
+    st.markdown(
+        "CLIP-based zero-shot **pre-ordering** + bucket-aware **Elo** + **uncertainty-aware** human routing. "
+        "Keyboard: <kbd>A</kbd>/<kbd>B</kbd>/<kbd>E</kbd>/<kbd>K</kbd>."
+    )
+
+    # Sidebar: dataset
+    st.sidebar.title("Configuration")
+    st.sidebar.subheader("Dataset")
+    csv_path  = st.sidebar.text_input("CSV File Path", placeholder="path/to/dataset.csv")
     image_dir = st.sidebar.text_input("Image Directory", placeholder="path/to/images/")
     image_col = st.sidebar.text_input("Image Column Name", value="image_path")
-    label_col = st.sidebar.text_input("Label Column Name", value="label")
-    
-    # Load dataset button
-    if st.sidebar.button("📁 Load Dataset"):
+    label_col = st.sidebar.text_input("Label Column Name (optional)", value="label")
+
+    if st.sidebar.button("Load Dataset"):
         if csv_path and image_dir:
             with st.spinner("Loading dataset..."):
                 dataset = load_dataset(csv_path, image_dir, image_col, label_col)
                 if dataset:
                     st.session_state.dataset = dataset
-                    st.success(f"✅ Loaded {dataset.n_items} items")
+                    st.success(f"Loaded {dataset.n_items} items.")
         else:
-            st.error("Please provide both CSV path and image directory")
-    
-    # Configuration
+            st.error("Please provide both CSV path and image directory.")
+
+    # Sidebar: image display
+    st.sidebar.subheader("Image Display")
+    max_h = st.sidebar.slider("Max Image Height (px)", 200, 900, 440, step=10)
+    width_pct = st.sidebar.slider("Column Width Percentage (%)", 50, 100, 100, step=5)
+    inject_dynamic_image_css(max_h, width_pct)
+
+    # Config (prompts/params)
     config = create_config_from_ui()
-    
-    # Initialize EZ-Sort
-    if 'dataset' in st.session_state and st.sidebar.button("🚀 Initialize EZ-Sort"):
-        with st.spinner("Initializing EZ-Sort (running CLIP classification)..."):
+
+    # Sidebar: sampling / queue shaping
+    st.sidebar.subheader("Sampling / Queue")
+    seed = st.sidebar.number_input("Random Seed", min_value=0, value=42, step=1)
+    sample_size = st.sidebar.number_input("Sample Size (items to annotate)", min_value=10, value=100, step=10)
+    neighbor_k = st.sidebar.slider("Neighbors per Anchor (pairs)", 2, 50, 10, step=1)
+    human_budget = st.sidebar.number_input("Max Human Queries (budget)", min_value=1, value=100000, step=1)
+
+    # Sidebar: evaluation
+    st.sidebar.subheader("Evaluation")
+    st.session_state.ui["equal_tolerance"] = float(
+        st.sidebar.number_input("Equal tolerance (label units)", min_value=0.0, value=1.0, step=0.5)
+    )
+
+    # Initialize
+    if "dataset" in st.session_state and st.session_state.dataset is not None and st.sidebar.button("Initialize EZ-Sort"):
+        with st.spinner("Initializing (CLIP pre-ordering, buckets, Elo, uncertainty)…"):
             try:
+                np.random.seed(seed)
                 annotator = EZSortAnnotator(st.session_state.dataset, config)
                 st.session_state.annotator = annotator
-                
-                # Initialize comparison queue (simplified)
-                comparison_queue = []
-                for i in range(min(100, annotator.n_items - 1)):  # Limit for demo
-                    for j in range(i + 1, min(i + 10, annotator.n_items)):  # Limit pairs
-                        comparison_queue.append((i, j))
-                
-                st.session_state.comparison_queue = comparison_queue
+
+                # Sample subset of items
+                n_items = annotator.n_items
+                chosen = np.random.choice(n_items, size=min(sample_size, n_items), replace=False)
+                chosen = sorted(chosen.tolist())
+                st.session_state.subset_indices = chosen
+
+                # Build comparison queue within the chosen subset
+                queue = []
+                for ix, i in enumerate(chosen):
+                    for j in chosen[ix + 1 : ix + 1 + neighbor_k]:
+                        queue.append((i, j))
+
+                # Shuffle for variety (deterministic with seed)
+                rng = np.random.default_rng(seed)
+                rng.shuffle(queue)
+
+                st.session_state.comparison_queue = queue
                 st.session_state.current_step = 0
-                
-                st.success("✅ EZ-Sort initialized successfully!")
-                
+                st.session_state.results = {
+                    "comparisons": [],
+                    "human_queries": 0,
+                    "auto_decisions": 0,
+                    "n_eval": 0,
+                    "n_correct": 0,
+                }
+
+                # Clear summary: proves sample_size is actually used
+                unique_items_in_queue = sorted(set([p[0] for p in queue] + [p[1] for p in queue]))
+                st.success(
+                    f"Initialized.\n\n"
+                    f"- Selected sample items: **{len(chosen)}** / {n_items}\n"
+                    f"- Unique items appearing in queue: **{len(unique_items_in_queue)}**\n"
+                    f"- Total pairs in queue: **{len(queue)}**  (≈ sample_size × neighbors per anchor)"
+                )
+
             except Exception as e:
                 st.error(f"Error initializing EZ-Sort: {e}")
-    
-    # Main annotation interface
+
+    # Main loop
     if st.session_state.annotator is not None:
-        
-        # Progress dashboard
-        with st.expander("📊 Progress Dashboard", expanded=True):
+        with st.expander("Progress Dashboard", expanded=True):
             display_progress_dashboard(st.session_state.results, st.session_state.annotator)
-        
-        # Current comparison
+
+        # Budget stop
+        if st.session_state.results["human_queries"] >= human_budget:
+            st.warning("Human query budget reached. Finalizing…")
+            st.session_state.current_step = len(st.session_state.comparison_queue)
+
         if st.session_state.comparison_queue and st.session_state.current_step < len(st.session_state.comparison_queue):
-            
             idx1, idx2 = st.session_state.comparison_queue[st.session_state.current_step]
-            
-            # Check if human query is needed
             should_query = st.session_state.annotator.should_query_human(
                 idx1, idx2, st.session_state.current_step, len(st.session_state.comparison_queue)
             )
-            
-            if should_query:
-                # Human comparison interface
-                preference = display_comparison_interface(st.session_state.annotator, idx1, idx2)
-                
-                if preference is not None and preference != "skip":
-                    # Process the comparison
-                    st.session_state.annotator.update_elo(idx1, idx2, preference)
-                    
-                    # Record result
-                    st.session_state.results['comparisons'].append({
-                        'step': st.session_state.current_step,
-                        'idx1': idx1,
-                        'idx2': idx2,
-                        'preference': preference,
-                        'type': 'human',
-                        'uncertainty': st.session_state.annotator.calculate_uncertainty(idx1, idx2)
+
+            if should_query and (st.session_state.results["human_queries"] < human_budget):
+                pref = display_comparison_interface(st.session_state.annotator, idx1, idx2, config)
+
+                if pref is not None and pref != "skip":
+                    apply_elo_update_safe(st.session_state.annotator, idx1, idx2, float(pref))
+                    update_accuracy_metrics(idx1, idx2, float(pref), config)
+
+                    st.session_state.results["comparisons"].append({
+                        "step": st.session_state.current_step,
+                        "idx1": idx1,
+                        "idx2": idx2,
+                        "preference": pref,
+                        "type": "human",
+                        "uncertainty": st.session_state.annotator.calculate_uncertainty(idx1, idx2),
                     })
-                    
-                    st.session_state.results['human_queries'] += 1
-                    st.session_state.current_step += 1
-                    
-                    st.rerun()
-                
-                elif preference == "skip":
+                    st.session_state.results["human_queries"] += 1
                     st.session_state.current_step += 1
                     st.rerun()
-            
+
+                elif pref == "skip":
+                    st.session_state.current_step += 1
+                    st.rerun()
+
             else:
-                # Auto comparison
-                auto_preference = 1 if st.session_state.annotator.elo_ratings[idx1] > st.session_state.annotator.elo_ratings[idx2] else 0
-                st.session_state.annotator.update_elo(idx1, idx2, auto_preference)
-                
-                # Record result
-                st.session_state.results['comparisons'].append({
-                    'step': st.session_state.current_step,
-                    'idx1': idx1,
-                    'idx2': idx2,
-                    'preference': auto_preference,
-                    'type': 'auto',
-                    'uncertainty': st.session_state.annotator.calculate_uncertainty(idx1, idx2)
+                auto_pref = 1.0 if st.session_state.annotator.elo_ratings[idx1] > st.session_state.annotator.elo_ratings[idx2] else 0.0
+                apply_elo_update_safe(st.session_state.annotator, idx1, idx2, auto_pref)
+
+                st.session_state.results["comparisons"].append({
+                    "step": st.session_state.current_step,
+                    "idx1": idx1,
+                    "idx2": idx2,
+                    "preference": auto_pref,
+                    "type": "auto",
+                    "uncertainty": st.session_state.annotator.calculate_uncertainty(idx1, idx2),
                 })
-                
-                st.session_state.results['auto_decisions'] += 1
+                st.session_state.results["auto_decisions"] += 1
                 st.session_state.current_step += 1
-                
-                st.info(f"🤖 Auto-decided: Image {idx1 if auto_preference else idx2} ranks higher (low uncertainty)")
-                time.sleep(1)
+                st.info(f"Auto-decided: {'A' if auto_pref==1.0 else 'B'} (low uncertainty)")
+                time.sleep(0.35)
                 st.rerun()
-        
+
         else:
-            st.success("🎉 Annotation session completed!")
-            
-            # Get final ranking
-            final_ranking = st.session_state.annotator.get_ranking()
-            st.session_state.results['final_ranking'] = final_ranking
-            
-            # Export results
+            st.success("Annotation session completed!")
+            try:
+                final_ranking = st.session_state.annotator.get_ranking()
+                st.session_state.results["final_ranking"] = final_ranking
+            except Exception:
+                st.session_state.results["final_ranking"] = []
+
             export_results(st.session_state.results, st.session_state.dataset)
-    
+
     else:
-        st.info("👆 Please load a dataset and initialize EZ-Sort to begin annotation.")
-        
-        # Example usage
-        with st.expander("📖 Example Usage"):
-            st.markdown("""
-            **1. Prepare your data:**
-            - CSV file with image paths and labels
-            - Image directory with actual images
-            
-            **2. Example CSV format:**
-            ```csv
-            image_path,age
-            face_001.jpg,25
-            face_002.jpg,34
-            face_003.jpg,19
-            ```
-            
-            **3. Configure prompts:**
-            - Choose appropriate domain (face, medical, quality, etc.)
-            - Adjust hierarchical prompts for your specific task
-            
-            **4. Start annotation:**
-            - EZ-Sort will automatically pre-order using CLIP
-            - You'll only be asked about uncertain comparisons
-            - Export results when complete
-            """)
+        st.info("Load a dataset and initialize EZ-Sort to begin.")
+        with st.expander("Quick Guide"):
+            st.markdown(
+                "- Put image paths in CSV (column name configurable). Optional numeric labels enable accuracy.\n"
+                "- Choose domain and review Level 1–4 prompts (they drive CLIP zero-shot pre-ordering).\n"
+                "- Use **Sample Size** and **Neighbors per Anchor** to shape the queue size.\n"
+                "- Keyboard: <kbd>A</kbd>/<kbd>B</kbd>/<kbd>E</kbd>/<kbd>K</kbd>."
+            )
 
 
 if __name__ == "__main__":
