@@ -444,24 +444,210 @@ def display_progress_dashboard(results: Dict[str, Any], annotator: EZSortAnnotat
             "- **Accuracy**: how often your human decision matches the ground-truth label rule (when labels exist).  \n"
             "They correlate (hard pairs are often wrong) but **they are not the same metric**."
         )
+import numpy as np
+import pandas as pd
+from typing import Tuple, Dict, Any, Optional, List
+from collections import Counter
+
+def _rankdata(x: np.ndarray) -> np.ndarray:
+    """Return 1..n ranks with average handling for ties (Spearman)."""
+    x = np.asarray(x)
+    order = np.argsort(x, kind="mergesort")  # stable
+    ranks = np.empty_like(order, dtype=float)
+    ranks[order] = np.arange(1, len(x) + 1, dtype=float)
+    # tie-average
+    vals, inv, counts = np.unique(x, return_inverse=True, return_counts=True)
+    for i, c in enumerate(counts):
+        if c > 1:
+            idx = np.where(inv == i)[0]
+            ranks[idx] = ranks[idx].mean()
+    return ranks
+
+def _pearsonr(a: np.ndarray, b: np.ndarray) -> float:
+    a = np.asarray(a, float); b = np.asarray(b, float)
+    if a.size < 2 or b.size < 2: return float("nan")
+    a = a - a.mean(); b = b - b.mean()
+    denom = np.sqrt((a * a).sum() * (b * b).sum())
+    return float((a * b).sum() / denom) if denom > 0 else float("nan")
+
+def _kendall_tau_b(x: np.ndarray, y: np.ndarray) -> float:
+    """Kendall tau-b with tie correction."""
+    n = len(x)
+    C = D = 0
+    for i in range(n - 1):
+        dx = x[i + 1:] - x[i]
+        dy = y[i + 1:] - y[i]
+        prod = dx * dy
+        C += int((prod > 0).sum())
+        D += int((prod < 0).sum())
+    # ties
+    Tx = sum(c * (c - 1) // 2 for c in Counter(x).values() if c > 1)
+    Ty = sum(c * (c - 1) // 2 for c in Counter(y).values() if c > 1)
+    denom = np.sqrt((C + D + Tx) * (C + D + Ty))
+    return float((C - D) / denom) if denom > 0 else 0.0
+
+def _icc2_1(matrix: np.ndarray) -> float:
+    """
+    ICC(2,1): two-way random effects, absolute agreement, single rater/measurement.
+    Expect matrix shape (n_subjects, 2) — here: [pred_score, true_score].
+    For scale compatibility we z-score each column first.
+    """
+    X = np.asarray(matrix, float)
+    if X.ndim != 2 or X.shape[1] != 2 or X.shape[0] < 2:
+        return float("nan")
+
+    # z-score columns to bring scales in line
+    X = (X - X.mean(axis=0)) / X.std(axis=0, ddof=1)
+    if np.any(~np.isfinite(X)):
+        return float("nan")
+
+    n, k = X.shape  # k=2
+    mean_t = X.mean(axis=1, keepdims=True)
+    mean_r = X.mean(axis=0, keepdims=True)
+    grand = X.mean()
+
+    SSR = k * np.sum((mean_t - grand) ** 2)                 # rows/targets
+    SSC = n * np.sum((mean_r - grand) ** 2)                 # columns/raters
+    SSE = np.sum((X - mean_t - mean_r + grand) ** 2)        # residual
+
+    MSR = SSR / (n - 1)
+    MSC = SSC / (k - 1) if k > 1 else 0.0
+    MSE = SSE / ((n - 1) * (k - 1)) if k > 1 else 0.0
+
+    denom = MSR + (k - 1) * MSE + (k * (MSC - MSE) / n)
+    return float((MSR - MSE) / denom) if denom > 0 else float("nan")
+
+def compute_final_metrics_for_subset(
+    final_ranking: List[int],
+    subset_indices: List[int],
+    dataset: EZSortDataset,
+    domain: str,
+    face_policy: str
+) -> Tuple[Dict[str, Any], pd.DataFrame]:
+    """
+    Build a per-item table (subset only) and compute Spearman, Kendall tau-b, ICC(2,1)
+    between the final ordering and labels (if numeric). ICC is computed on z-scored
+    [pred_score, true_score] so scales are comparable.
+    """
+    subset = set(subset_indices)
+    ranked_subset = [i for i in final_ranking if i in subset]
+    n = len(ranked_subset)
+
+    # Assemble table
+    rows = []
+    for pos, idx in enumerate(ranked_subset):
+        label_val = get_label_value(dataset, idx)
+        rows.append({
+            "image_index": idx,
+            "rank_position": pos,  # 0=best/top
+            "image_path": dataset.image_paths[idx],
+            "label": label_val
+        })
+    table = pd.DataFrame(rows)
+
+    # If labels missing or not enough items — metrics become NaN
+    if n < 2 or table["label"].isna().any():
+        metrics = {"n": n, "spearman_rho": float("nan"), "kendall_tau_b": float("nan"), "icc": float("nan")}
+        return metrics, table
+
+    # Build scores: higher score should mean "better/top"
+    # predicted score: invert rank so top gets higher score
+    pred_score = -(table["rank_position"].to_numpy().astype(float))
+
+    # true score: depends on policy for face; generic domains default to ascending=better
+    labels = table["label"].to_numpy().astype(float)
+    if domain == "face":
+        # younger policy ⇒ lower age is better ⇒ true score = -age
+        true_score = -labels if face_policy == "younger" else labels
+    else:
+        # If your task defines "higher label = better", keep labels.
+        # Otherwise adapt here; for now we assume higher label = better.
+        true_score = labels
+
+    # Spearman
+    rho = _pearsonr(_rankdata(pred_score), _rankdata(true_score))
+
+    # Kendall tau-b
+    tau_b = _kendall_tau_b(pred_score, true_score)
+
+    # ICC(2,1) on z-scored columns
+    icc_val = _icc2_1(np.column_stack([pred_score, true_score]))
+
+    metrics = {"n": n, "spearman_rho": rho, "kendall_tau_b": tau_b, "icc": icc_val}
+    return metrics, table
 
 
-def export_results(results: Dict[str, Any], dataset: EZSortDataset):
+def export_results(
+    results: Dict[str, Any],
+    dataset: EZSortDataset,
+    cfg: EZSortConfig,
+    subset_indices: List[int]
+):
+    """Export only the sampled subset to CSV; also compute and show final ranking metrics."""
     st.subheader("Export Results")
+
+    # Final ranking (filter to subset only)
+    final_ranking = results.get("final_ranking", [])
+    if not final_ranking:
+        st.info("Final ranking is empty. Nothing to export yet.")
+        return
+
+    face_policy = st.session_state.ui.get("face_policy", "younger")
+    metrics, subset_table = compute_final_metrics_for_subset(
+        final_ranking=final_ranking,
+        subset_indices=subset_indices,
+        dataset=dataset,
+        domain=cfg.domain,
+        face_policy=face_policy,
+    )
+
+    # Show metrics inline
+    st.markdown("**Final ranking accuracy (subset only):**")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("n (subset)", metrics["n"])
+    c2.metric("Spearman ρ", "-" if np.isnan(metrics["spearman_rho"]) else f"{metrics['spearman_rho']:.3f}")
+    c3.metric("Kendall τ-b", "-" if np.isnan(metrics["kendall_tau_b"]) else f"{metrics['kendall_tau_b']:.3f}")
+    c4.metric("ICC(2,1)", "-" if np.isnan(metrics["icc"]) else f"{metrics['icc']:.3f}")
+
+    # Export format and buttons
     fmt = st.selectbox("Export Format", ["CSV", "JSON"])
+
+    # Comparisons are already subset-only if you built the queue from the subset,
+    # but we still filter defensively.
+    comp_df = pd.DataFrame(results["comparisons"])
+    if not comp_df.empty:
+        subset_set = set(subset_indices)
+        comp_df = comp_df[comp_df["idx1"].isin(subset_set) & comp_df["idx2"].isin(subset_set)].reset_index(drop=True)
+
     if st.button("Save"):
         if fmt == "CSV":
-            comp_df = pd.DataFrame(results["comparisons"])
-            final_ranking = results.get("final_ranking", [])
-            rank_df = pd.DataFrame({
-                "image_index": final_ranking,
-                "rank_position": range(len(final_ranking)),
-                "image_path": [dataset.image_paths[i] for i in final_ranking] if final_ranking else [],
-            })
-            st.download_button("Download Comparisons CSV", comp_df.to_csv(index=False), "ez_sort_comparisons.csv", "text/csv")
-            st.download_button("Download Ranking CSV", rank_df.to_csv(index=False), "ez_sort_ranking.csv", "text/csv")
+            # 1) Pairwise comparisons (subset only)
+            st.download_button(
+                "Download Comparisons CSV (subset pairs)",
+                comp_df.to_csv(index=False),
+                "ez_sort_comparisons_subset.csv",
+                "text/csv",
+            )
+            # 2) Final ranking table (subset only, exactly N rows if N sample)
+            st.download_button(
+                "Download Ranking CSV (subset only)",
+                subset_table.to_csv(index=False),
+                "ez_sort_ranking_subset.csv",
+                "text/csv",
+            )
         else:
-            st.download_button("Download JSON", json.dumps(results, indent=2), "ez_sort_results.json", "application/json")
+            payload = {
+                "metrics": metrics,
+                "comparisons": comp_df.to_dict(orient="records"),
+                "ranking_subset": subset_table.to_dict(orient="records"),
+            }
+            st.download_button(
+                "Download Results JSON (subset + metrics)",
+                json.dumps(payload, indent=2),
+                "ez_sort_results_subset.json",
+                "application/json",
+            )
+
 
 
 # =========================
@@ -565,13 +751,17 @@ def apply_elo_update_safe(annotator: EZSortAnnotator, i: int, j: int, preference
 # Comparison UI
 # =========================
 def display_comparison_interface(annotator: EZSortAnnotator, idx1: int, idx2: int, cfg: EZSortConfig) -> Optional[float]:
+    """Pairwise comparison UI with explicit input-based hotkeys:
+       Type A (Image A), D (Image B), s (Equal) in the EZ_HOTKEY box and press Enter to apply.
+    """
+    # Wording based on face policy
     if cfg.domain == "face":
         policy = st.session_state.ui.get("face_policy", "younger")
-        q = "Which face looks **younger**?" if policy == "younger" else "Which face looks **older**?"
+        question = "Which face looks **younger**?" if policy == "younger" else "Which face looks **older**?"
     else:
-        q = "Which image ranks **higher**?"
+        question = "Which image ranks **higher**?"
 
-    st.markdown(f'<div class="sub-header">🤔 {q}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="sub-header">🤔 {question}</div>', unsafe_allow_html=True)
 
     # Uncertainty ribbon
     uncertainty = annotator.calculate_uncertainty(idx1, idx2)
@@ -583,10 +773,10 @@ def display_comparison_interface(annotator: EZSortAnnotator, idx1: int, idx2: in
         unsafe_allow_html=True,
     )
 
-    c1, c2 = st.columns(2)
-    pref = None
+    col1, col2 = st.columns(2)
+    pref: Optional[float] = None
 
-    with c1:
+    with col1:
         try:
             img1 = Image.open(annotator.dataset.get_image_path(idx1))
             st.markdown('<div class="image-container">', unsafe_allow_html=True)
@@ -597,38 +787,44 @@ def display_comparison_interface(annotator: EZSortAnnotator, idx1: int, idx2: in
         except Exception as e:
             st.error(f"Could not load image A: {e}")
 
-    with c2:
+    with col2:
         try:
             img2 = Image.open(annotator.dataset.get_image_path(idx2))
             st.markdown('<div class="image-container">', unsafe_allow_html=True)
             st.image(img2, caption=f"Image B (Index: {idx2})", use_column_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
-            if st.button("🏆 Image B (B)", key=f"btn_b_{idx1}_{idx2}", use_container_width=True):
+            if st.button("🏆 Image B (D)", key=f"btn_b_{idx1}_{idx2}", use_container_width=True):
                 pref = 0.0
         except Exception as e:
             st.error(f"Could not load image B: {e}")
 
     c_eq, c_skip = st.columns(2)
     with c_eq:
-        if st.button("⚖️ Equal (E)", key=f"btn_equal_{idx1}_{idx2}", use_container_width=True):
+        if st.button("⚖️ Equal (s)", key=f"btn_equal_{idx1}_{idx2}", use_container_width=True):
             pref = 0.5
     with c_skip:
-        if st.button("⏭️ Skip (K)", key=f"btn_skip_{idx1}_{idx2}", use_container_width=True):
+        if st.button("⏭️ Skip", key=f"btn_skip_{idx1}_{idx2}", use_container_width=True):
             pref = "skip"
 
-    # Keyboard shortcuts (global)
-    key = capture_hotkey()
-    if key == "A":
-        pref = 1.0
-    elif key == "B":
-        pref = 0.0
-    elif key == "E":
-        pref = 0.5
-    elif key == "K":
-        pref = "skip"
+    # --- Explicit input-based hotkey (type then press Enter) ---
+    hk = st.text_input(
+        "EZ_HOTKEY (type A for Image A, D for Image B, s for Equal, press Enter)",
+        key="EZ_HOTKEY",
+        max_chars=1,
+    )
+    # When Enter is pressed, Streamlit reruns and hk contains the typed char
+    if hk:
+        ch = hk.strip()
+        if ch in ("A", "a"):
+            pref = 1.0
+        elif ch in ("D", "d"):
+            pref = 0.0
+        elif ch == "s":  # lowercase 's' as requested
+            pref = 0.5
+        # clear after use so it won't repeat on next rerun
+        st.session_state["EZ_HOTKEY"] = ""
 
     return pref
-
 
 # =========================
 # Main App
@@ -790,8 +986,14 @@ def main():
                 st.session_state.results["final_ranking"] = final_ranking
             except Exception:
                 st.session_state.results["final_ranking"] = []
-
-            export_results(st.session_state.results, st.session_state.dataset)
+        
+            # Export (subset-only + metrics)
+            export_results(
+                st.session_state.results,
+                st.session_state.dataset,
+                config,
+                st.session_state.subset_indices,
+            )
 
     else:
         st.info("Load a dataset and initialize EZ-Sort to begin.")
